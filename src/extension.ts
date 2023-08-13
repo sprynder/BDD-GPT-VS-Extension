@@ -3,41 +3,84 @@
 import * as vscode from 'vscode';
 import { Parser } from './parser';
 import { getPineconeClient, createIndexIfNotExists, chunkedUpsert, Embedder } from "./pinecone";
+import { QueryResponse, VectorOperationsApi } from '@pinecone-database/pinecone/dist/pinecone-generated-ts-fetch';
+//import { SearchPanel } from './panels/search';
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
 
+export function activate(context: vscode.ExtensionContext) {
+	let currentPanel: vscode.WebviewPanel | undefined = undefined;
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
 	console.log('Congratulations, your extension "bddgpt" is now active!');
-
+	const embedder = new Embedder();
+	let index: VectorOperationsApi | undefined = undefined;
+	let fileParser = new Parser();
+	startClient();
 	// The command has been defined in the package.json file
 	// Now provide the implementation of the command with registerCommand
 	// The commandId parameter must match the command field in package.json
 	let disposable = vscode.commands.registerCommand('bddgpt.search', () => {
 		// The code you place here will be executed every time your command is executed
 		// Display a message box to the user
-		const panel = vscode.window.createWebviewPanel(
-			'searchView', // Identifies the type of the webview. Used internally
-			'BDD Semantic Search', // Title of the panel displayed to the user
-			vscode.ViewColumn.One, // Editor column to show the new webview panel in.
-			{} // Webview options. More on these later.
-		);
+		if (currentPanel) {
+			currentPanel.reveal(vscode.ViewColumn.One);
+		} else {
+			currentPanel = vscode.window.createWebviewPanel(
+				'catCoding',
+				'Cat Coding',
+				vscode.ViewColumn.One,
+				{
+					enableScripts: true,
+					enableCommandUris: true
+				}
+			);
+			currentPanel.webview.html = getWebviewContent();
+			let options : QueryResponse | undefined = undefined;
+			currentPanel.webview.onDidReceiveMessage(
+				message => {
+					switch (message.command) {
+						case 'query':
+							console.log(message.text);
+							searchQuery(message.text).then(async (results) => {
+								//create HTML to display results
+								//set currentPanel.webview.html = new html;
+								options = results;
+								if (currentPanel && results) {
+									let newHTML = await createHTML(results, currentPanel);
+									currentPanel.webview.html = newHTML;
+								}
 
-		panel.webview.html = getWebviewContent();
+							});
+							return;
+						case 'open':
+							openFiles(message.text, options);					
+					}
+				},
+				undefined,
+				context.subscriptions
+			);
 
-		panel.onDidDispose(
-			() => {
-				// When the panel is closed, cancel any future updates to the webview content
-			},
-			null,
-			context.subscriptions
-		);
+
+
+			currentPanel.onDidDispose(
+				() => {
+					currentPanel = undefined;
+				},
+				undefined,
+				context.subscriptions
+			);
+		}
+
 	});
 
 	let search = vscode.commands.registerCommand('bddgpt.scan', () => {
 		// const wsedit = new vscode.WorkspaceEdit();
 
+		if (index === undefined) {
+			console.log("Client is still setting up!");
+			return;
+		}
 		let temp = vscode.workspace.workspaceFolders;
 		let uriList: vscode.Uri[] = [];
 		if (temp) {
@@ -45,7 +88,7 @@ export function activate(context: vscode.ExtensionContext) {
 			let rootUri = temp[0].uri;
 			const wsPath = rootUri.fsPath;
 			// const filePath = vscode.Uri.file(wsPath + '/BDD.json');
-			let fileParser = new Parser();
+
 			// vscode.workspace.applyEdit(wsedit);
 			findFiles(rootUri, uriList).then(async (res) => {
 				for (let uri of uriList) {
@@ -60,39 +103,55 @@ export function activate(context: vscode.ExtensionContext) {
 				console.log(fileParser.tokens);
 				await context.workspaceState.update("tokens", fileParser.tokens);
 			}).then(async () => {
-				const indexName = "bdd-gpt";
-				let counter = 0;
 				let BDDSteps = Array.from(fileParser.tokens.keys());
-				const embedder = new Embedder();
+				const indexName = "bdd-gpt";
 				const pineconeClient = await getPineconeClient();
 				await createIndexIfNotExists(pineconeClient, indexName, 4096);
-				const index = pineconeClient.Index(indexName);
+				index = pineconeClient.Index(indexName);
 				// Start the batch embedding process
 				let temp = await embedder.embed(BDDSteps)
-				await Promise.all(temp.map((curVec,i) =>{
-					index.upsert({
+				await Promise.all(temp.map((curVec, i) => {
+					index?.upsert({
 						upsertRequest: {
-							vectors: [{id: BDDSteps[i],
-								values: curVec}]
+							vectors: [{
+								id: BDDSteps[i],
+								values: curVec
+							}]
 						}
 					});
 				}));
-
-				let queryEmbedding = await embedder.embed(["cookies are not cleared after opening product page"]);
-				console.log(queryEmbedding[0]);
-				const results = await index.query({
-					queryRequest: {
-						vector: queryEmbedding[0],
-						topK: 5,
-						includeValues: true,
-					},
-
-				})
-				console.log(results)
 			});
-
 		}
 	});
+
+	context.subscriptions.push(disposable);
+	context.subscriptions.push(search);
+
+	async function openFiles(buttonID: string, options :QueryResponse | undefined)
+	{	let pos = Number(buttonID)
+		console.log(pos);
+		let map: Map<string, [vscode.Uri, number]> | undefined = await context.workspaceState.get("tokens");
+		console.log(map);
+		if (map) {
+			if(options && options.matches){
+				let curURI = map.get(options.matches[pos].id);
+				if(curURI){
+					console.log(curURI);
+					let lineNumber = new vscode.Position(curURI[1],0);
+					let tempNum = curURI[1];
+					vscode.workspace.openTextDocument(curURI[0]).then((doc)=>{
+						vscode.window.showTextDocument(doc).then((editor)=>{
+							editor.selections = [new vscode.Selection(lineNumber,lineNumber)];
+
+							let range = new vscode.Range(new vscode.Position(tempNum+15,0),lineNumber);
+							editor.revealRange(range);
+						});
+					});
+				}
+			}
+		}
+						
+	}
 
 	async function findFiles(rootUri: vscode.Uri, uriList: vscode.Uri[]) {
 		let directoryResult = await vscode.workspace.fs.readDirectory(rootUri)
@@ -112,26 +171,116 @@ export function activate(context: vscode.ExtensionContext) {
 
 	}
 
-	context.subscriptions.push(disposable);
-	context.subscriptions.push(search);
+	async function startClient() {
+		const indexName = "bdd-gpt";
+		const pineconeClient = await getPineconeClient();
+		await createIndexIfNotExists(pineconeClient, indexName, 4096);
+		index = pineconeClient.Index(indexName);
+		console.log("Client is loaded!")
+	}
 
+	async function searchQuery(query: string) {
+		if (index === undefined) {
+			console.log("Client is still loading!");
+			return;
+		}
+		let queryEmbedding = await embedder.embed([query]);
+		console.log(queryEmbedding[0]);
+		const results = await index?.query({
+			queryRequest: {
+				vector: queryEmbedding[0],
+				topK: 5,
+				includeValues: true,
+			},
+
+		})
+		console.log(results);
+		return results;
+	}
+
+	async function createHTML(results: QueryResponse, panel: vscode.WebviewPanel) {
+		if (results.matches) {
+			let newHTML = `
+		<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Cat Coding</title>
+	</head>
+	<body>
+		<input id="input">Search for BDD Steps</input>
+		<button id="submit" onclick = "getInputValue();">Search!</button>
+		<script>
+		const vscode = acquireVsCodeApi();
+		function openStepFile(val)
+		{
+			console.log(val);
+			vscode.postMessage({command: 'open', text: val});
+		}
+		function getInputValue(){
+			
+			const text = document.getElementById('input').value;
+			vscode.postMessage({command: 'query', text: text});
+			console.log(text);
+		}
+		</script>
+		`;
+			let map: Map<string, [vscode.Uri, number]> | undefined = await context.workspaceState.get("tokens");
+			if (map) {
+				for (let i = 0; i < results.matches.length; i++) {
+					let curStep = results.matches[i].id;
+					let curScore = results.matches[i].score;
+					let curURI = map.get(curStep);
+					if(curURI){
+						let webURI = panel.webview.asWebviewUri(curURI[0]);
+						let curLinePosition = fileParser.tokens.get("curStep")?.[1];
+						newHTML +="<div><a>" + curStep +  "</a><button value ="+i+' onclick = "openStepFile(this.value);">Open File</button></div>\n';
+					}
+				}
+			}
+			else {
+				return "ERROR";
+			}
+			newHTML += `
+		</body>
+		</html>`;
+		console.log(newHTML);			
+			return newHTML;
+		}
+		else {
+			return "ERROR";
+		}
+	}
 
 }
 
+
 function getWebviewContent() {
 	return `<!DOCTYPE html>
-  <html lang="en">
-  <head>
-	  <meta charset="UTF-8">
-	  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-	  <title>BDD Semantic Search</title>
-  </head>
-  <body>
-  <input>
-  </input>
-  </body>
-  </html>`;
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Cat Coding</title>
+	</head>
+	<body>
+		<input id="input">Search for BDD Steps</input>
+		<button id="submit" onclick = "getInputValue();">Search!</button>
+		<script>
+		const vscode = acquireVsCodeApi();
+		function getInputValue(){
+			
+			const text = document.getElementById('input').value;
+			vscode.postMessage({command: 'query', text: text});
+			console.log(text);
+		}
+			
+		</script>
+	</body>
+	</html>`;
 }
 
 // This method is called when your extension is deactivated
 export function deactivate() { }
+
