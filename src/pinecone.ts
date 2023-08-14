@@ -2,17 +2,15 @@ import { Vector } from "@pinecone-database/pinecone";
 import { PineconeClient,utils } from "@pinecone-database/pinecone";
 import * as vscode from 'vscode';
 import * as cohere from "cohere-ai";
-
 export const { createIndexIfNotExists, chunkedUpsert } = utils;
-cohere.init("Y9FxEPgNOaSUnIshWdfHmtVRMNaLyX5sRawtmR5o");
+
+;
+const pineconeAPIKey: string | undefined = vscode.workspace.getConfiguration('bddgpt').get("pineconeAPIKey");
+const cohereAPIKey : string | undefined = vscode.workspace.getConfiguration('bddgpt').get("cohereAPIKey");
+if(cohereAPIKey){
+cohere.init(cohereAPIKey);
+}
 const MODEL = "embed-english-v2.0";
-
-
-const sliceIntoChunks = <T>(arr: T[], chunkSize: number) => {
-    return Array.from({ length: Math.ceil(arr.length / chunkSize) }, (_, i) =>
-      arr.slice(i * chunkSize, (i + 1) * chunkSize)
-    );
-  };
 
 class Embedder {
   
@@ -54,10 +52,12 @@ export const getPineconeClient = async (): Promise<PineconeClient> => {
   } else {
     pineconeClient = new PineconeClient();
 
+    if(pineconeAPIKey){
     await pineconeClient.init({
-      apiKey: "909a3195-602e-46c2-b603-a0f44f1183d7",
+      apiKey: pineconeAPIKey,
       environment: "us-west1-gcp"
     });
+  }
   }
   return pineconeClient;
 };

@@ -7,7 +7,7 @@ import { QueryResponse, VectorOperationsApi } from '@pinecone-database/pinecone/
 //import { SearchPanel } from './panels/search';
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
-
+let scanFlag = false;
 export function activate(context: vscode.ExtensionContext) {
 	let currentPanel: vscode.WebviewPanel | undefined = undefined;
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
@@ -27,8 +27,8 @@ export function activate(context: vscode.ExtensionContext) {
 			currentPanel.reveal(vscode.ViewColumn.One);
 		} else {
 			currentPanel = vscode.window.createWebviewPanel(
-				'catCoding',
-				'Cat Coding',
+				'BDDGPT',
+				'BDD Semantic Search',
 				vscode.ViewColumn.One,
 				{
 					enableScripts: true,
@@ -41,7 +41,8 @@ export function activate(context: vscode.ExtensionContext) {
 				message => {
 					switch (message.command) {
 						case 'query':
-							console.log(message.text);
+							if(scanFlag){
+							vscode.window.showInformationMessage("Starting search for BDD steps!");
 							searchQuery(message.text).then(async (results) => {
 								//create HTML to display results
 								//set currentPanel.webview.html = new html;
@@ -49,10 +50,15 @@ export function activate(context: vscode.ExtensionContext) {
 								if (currentPanel && results) {
 									let newHTML = await createHTML(results, currentPanel);
 									currentPanel.webview.html = newHTML;
+									vscode.window.showInformationMessage("Results found!");
 								}
 
 							});
 							return;
+						}
+						else{
+							vscode.window.showInformationMessage("Scan has not been run. Please run a scan first before searching!");
+						}
 						case 'open':
 							openFiles(message.text, options);					
 					}
@@ -76,11 +82,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	let search = vscode.commands.registerCommand('bddgpt.scan', () => {
 		// const wsedit = new vscode.WorkspaceEdit();
-
+		
 		if (index === undefined) {
-			console.log("Client is still setting up!");
+			vscode.window.showInformationMessage("Client is still setting up! Please wait a moment as it finished initializing.");
 			return;
 		}
+		vscode.window.showInformationMessage("Starting to scan all files for BDD steps!");
 		let temp = vscode.workspace.workspaceFolders;
 		let uriList: vscode.Uri[] = [];
 		if (temp) {
@@ -100,7 +107,6 @@ export function activate(context: vscode.ExtensionContext) {
 			}).then(async () => {
 				//Have all BDD steps
 				//Now to vectorize them all and send them to PineCone API, and store them in locla
-				console.log(fileParser.tokens);
 				await context.workspaceState.update("tokens", fileParser.tokens);
 			}).then(async () => {
 				let BDDSteps = Array.from(fileParser.tokens.keys());
@@ -120,6 +126,8 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 					});
 				}));
+				vscode.window.showInformationMessage("Finished scanning all files! You can now search for BDD steps!");
+				scanFlag=true;
 			});
 		}
 	});
@@ -129,20 +137,16 @@ export function activate(context: vscode.ExtensionContext) {
 
 	async function openFiles(buttonID: string, options :QueryResponse | undefined)
 	{	let pos = Number(buttonID)
-		console.log(pos);
 		let map: Map<string, [vscode.Uri, number]> | undefined = await context.workspaceState.get("tokens");
-		console.log(map);
 		if (map) {
 			if(options && options.matches){
 				let curURI = map.get(options.matches[pos].id);
 				if(curURI){
-					console.log(curURI);
 					let lineNumber = new vscode.Position(curURI[1],0);
 					let tempNum = curURI[1];
 					vscode.workspace.openTextDocument(curURI[0]).then((doc)=>{
 						vscode.window.showTextDocument(doc).then((editor)=>{
 							editor.selections = [new vscode.Selection(lineNumber,lineNumber)];
-
 							let range = new vscode.Range(new vscode.Position(tempNum+15,0),lineNumber);
 							editor.revealRange(range);
 						});
@@ -176,16 +180,15 @@ export function activate(context: vscode.ExtensionContext) {
 		const pineconeClient = await getPineconeClient();
 		await createIndexIfNotExists(pineconeClient, indexName, 4096);
 		index = pineconeClient.Index(indexName);
-		console.log("Client is loaded!")
+		vscode.window.showInformationMessage("BDDGPT Client has finished loading! You can now run scan and search commands!");
 	}
 
 	async function searchQuery(query: string) {
 		if (index === undefined) {
-			console.log("Client is still loading!");
+			vscode.window.showInformationMessage("Client is still loading!");
 			return;
 		}
 		let queryEmbedding = await embedder.embed([query]);
-		console.log(queryEmbedding[0]);
 		const results = await index?.query({
 			queryRequest: {
 				vector: queryEmbedding[0],
@@ -194,7 +197,6 @@ export function activate(context: vscode.ExtensionContext) {
 			},
 
 		})
-		console.log(results);
 		return results;
 	}
 
@@ -244,8 +246,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			newHTML += `
 		</body>
-		</html>`;
-		console.log(newHTML);			
+		</html>`;		
 			return newHTML;
 		}
 		else {

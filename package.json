@@ -9,7 +9,7 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -21,7 +21,17 @@
         "command": "bddgpt.scan",
         "title": "BDD Scan"
       }
-    ]
+    ],
+    "configuration":{
+      "title": "bddgpt",
+      "properties": {"bddgpt.cohereAPIKey" : { "type": "string",
+      "default": "",
+      "description": "API Key for Cohere embeddings"},
+      "bddgpt.pineconeAPIKey": { "type": "string",
+      "default": "",
+      "description": "API Key for Pinecone DB"}
+    }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
